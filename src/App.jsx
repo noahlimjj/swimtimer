@@ -91,31 +91,41 @@ function detect(samples, fps) {
     ? long.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a))
     : [stableIdx[0], stableIdx[stableIdx.length - 1]];
 
-  /* 5. Entry. The loudest frame in the first two seconds of the run is the
-     entry splash. Where takeoff sits relative to that peak is not fixed: on one
-     clip the peak trailed the feet leaving by a frame, on another it led by six,
-     because an arm swing can break the water before the feet go. So the peak
-     is reported as the centre of a review window, never as the answer. */
-  let pk = s0;
-  const lookEnd = Math.min(s0 + Math.round(2 * fps), s1);
-  for (let i = s0; i <= lookEnd; i++) if (e[i] > e[pk]) pk = i;
+  /* 5. Candidate events, ranked by loudness and spread out in time.
 
-  /* 6. Arrival. Take the leading edge of the last big surge rather than its
-     peak: the peak is the swimmer thrashing at the wall after the touch. */
-  const halfway = Math.round((s0 + s1) / 2);
-  let ap = halfway;
-  for (let i = halfway; i <= s1; i++) if (e[i] > e[ap]) ap = i;
-  const edge = base + 0.75 * (e[ap] - base);
-  let arrive = ap;
-  while (arrive > halfway && e[arrive - 1] > edge) arrive--;
+     This deliberately does NOT name one of them the dive and another the touch.
+     Rules that did that were tested against four clips shot from three camera
+     positions and none survived: the entry splash is the loudest thing in frame
+     when the phone is close to the start, and one of the quietest when it is
+     further back, so "loudest peak near the start of the swim" picks the dive
+     on one clip and mid-pool thrashing on the next. Ranked candidates are what
+     the signal actually supports — they cut a 35-second clip down to three
+     places worth looking, and the call stays with the person watching. */
+  const order = Array.from({ length: s1 - s0 + 1 }, (_, i) => s0 + i)
+    .filter((i) => gated[i])
+    .sort((a, b) => e[b] - e[a]);
+  const spread = Math.round(1.2 * fps);
+  const peaks = [];
+  for (const i of order) {
+    if (peaks.every((p) => Math.abs(p - i) > spread)) peaks.push(i);
+    if (peaks.length === 4) break;
+  }
+  /* For each peak, walk back to where its rise began. On a splash the leading
+     edge sits closer to the event than the peak does, since the peak is water
+     still flying after the swimmer has already arrived. */
+  const cands = peaks.map((i) => {
+    const foot = base + 0.6 * (e[i] - base);
+    let j = i;
+    while (j > s0 && e[j - 1] > foot) j--;
+    return { t: samples[j].t, peak: samples[i].t, v: e[i] };
+  });
+  cands.sort((a, b) => a.t - b.t);
 
   return {
     steadyFrom: samples[stableIdx[0]].t,
     steadyTo: samples[stableIdx[stableIdx.length - 1]].t,
     swim: [samples[s0].t, samples[s1].t],
-    dive: samples[pk].t,
-    touch: samples[arrive].t,
-    touchPeak: samples[ap].t,
+    candidates: cands,
     trace: samples.map((s, i) => ({ t: s.t, v: e[i], ok: gated[i] })),
     roiFrac: roi.length / cellCount,
   };
@@ -392,15 +402,13 @@ export default function App() {
       return;
     }
     setResult(r);
-    if (Math.abs(eff - fps) > 3) setFps([24, 25, 30, 50, 60, 120, 240].reduce((a, b) => (Math.abs(b - eff) < Math.abs(a - eff) ? b : a)));
-    setDive(r.dive);
-    setTouch(r.touch);
-    seekTo(r.dive);
-    setReview("dive");
-    setFlash((n) => n + 1);
+    if (Math.abs(eff - fps) > 3)
+      setFps([24, 25, 30, 50, 60, 120, 240].reduce((a, b) => (Math.abs(b - eff) < Math.abs(a - eff) ? b : a)));
+    if (r.candidates.length) seekTo(r.candidates[0].t);
     setNote(
-      `Scanned in ${((performance.now() - t0) / 1000).toFixed(1)}s. Both marks are placed from the water, ` +
-        `not measured off your body — step through and confirm each one.`
+      `Scanned in ${((performance.now() - t0) / 1000).toFixed(1)}s. These are the loudest moments in ` +
+        `the water — the dive and the wall are usually among them, but which is which depends on where ` +
+        `the phone was, so tap through and mark them yourself.`
     );
   };
 
@@ -656,6 +664,16 @@ export default function App() {
                   {scanning ? `Reading the water ${Math.round(scanPct * 100)}%` : result ? "Scan again" : "Scan and place marks"}
                 </button>
               </div>
+
+              {result?.candidates?.length > 0 && (
+                <div className="row seg" style={{ flexWrap: "wrap" }}>
+                  {result.candidates.map((c, i) => (
+                    <button key={i} className="btn ghost mono" onClick={() => seekTo(c.t)}>
+                      {c.t.toFixed(2)}s
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {note && <div className="note">{note}</div>}
 
