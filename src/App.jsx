@@ -63,6 +63,7 @@ export default function App() {
   const rafRef = useRef(0);
   const urlRef = useRef(null);
   const panRef = useRef({ dragging: false, moved: false, x: 0, y: 0 });
+  const effFpsRef = useRef(30); // frame rate the last scan measured, for the on-demand pose pass
 
   const [src, setSrc] = useState(null);
   const [fileName, setFileName] = useState(null);
@@ -304,17 +305,27 @@ export default function App() {
     const emaFps = detectedFps && detectedFps > 10 ? detectedFps : null;
     const effFps = emaFps || samples.length / Math.max(duration, 0.001) || 30;
 
-    /* Dropped-frame guard. Expect roughly duration*fps samples; well short of
-       that means the device couldn't keep up at this rate. Retry once at 8x. */
-    const expected = duration * (emaFps || 30);
-    if (samples.length < 0.6 * expected) {
+    /* Frame-yield guard. `requestVideoFrameCallback` only fires for frames the
+       browser actually *presents*, and at high playback rates it presents far
+       fewer than it decodes — Chrome yields ~11% of frames at 16x, ~25% at 8x,
+       ~94% at 2x. Safari presents every frame even at 16x. So step the rate
+       down until the yield is good enough for detect() to read, or bottom out
+       at 2x. Each clip is ~30fps; duration*30 is close enough for the ratio. */
+    const expected = duration * 30;
+    const yield_ = samples.length / Math.max(expected, 1);
+    const LADDER = [16, 8, 4, 2];
+    if (yield_ < 0.85 && rate > 2) {
+      const next = yield_ < 0.3 ? 2 : LADDER[LADDER.indexOf(rate) + 1] || 2;
       setDroppedFrames(true);
-      if (rate > 8) {
-        setNote(`Only ${samples.length} of ~${Math.round(expected)} frames came through at ${rate}x — retrying at 8x.`);
-        setScanRate(8);
-        return runScan(8);
-      }
-      setNote(`Still dropping frames at ${rate}x (${samples.length} of ~${Math.round(expected)}). The trace and times below are coarser than the frame rate suggests.`);
+      setNote(`This browser sampled only ${Math.round(yield_ * 100)}% of the frames at ${rate}× — rescanning at ${next}× (slower, but reads every frame).`);
+      setScanRate(next);
+      return runScan(next);
+    }
+    if (yield_ < 0.85) {
+      setDroppedFrames(true);
+      setNote(`Sampled ${samples.length} of ~${Math.round(expected)} frames even at ${rate}×. The trace and times below are coarser than the frame rate suggests.`);
+    } else {
+      setDroppedFrames(false);
     }
 
     const r = detect(samples, effFps);
@@ -347,16 +358,27 @@ export default function App() {
       nextAuto.touch = { source: "guess", unc: Math.round(uncS * uncFps) };
       setTouch(wall.t);
     }
-    if (r.candidates.length) {
+    /* Dive seed: the loudest candidate in the first part of the swim. From a
+       phone propped at the start, the entry splash is a strong early event;
+       further back it isn't, which is why this stays a flagged guess and the
+       pose pass (button below) is offered to pin it. */
+    const early = r.candidates.filter((c) => c.t < r.steadyFrom + 0.45 * span);
+    const diveSeed = (early.length ? early : r.candidates).reduce(
+      (best, c) => (best && best.v >= c.v ? best : c), null);
+    if (diveSeed) {
       nextAuto.dive = { source: "guess", unc: 30 };
-      setDive(r.candidates[0].t);
-      seekTo(r.candidates[0].t);
+      setDive(diveSeed.t);
+      seekTo(diveSeed.t);
     }
     setAuto(nextAuto);
-    setNote(`Scanned in ${(elapsed / 1000).toFixed(1)}s. Looking for the dive…`);
-
-    /* --- pose pass: the one event that generalises across camera angles --- */
-    await runDivePose(r, effFps, nextAuto);
+    effFpsRef.current = effFps;
+    const wallMsg = wall
+      ? `the wall is a guess (±${nextAuto.touch.unc} frames) — step to it and confirm`
+      : `no clear finish in the water — tap a candidate near the touch and mark it`;
+    setNote(
+      `Scanned in ${(elapsed / 1000).toFixed(1)}s. Dive and wall are guesses from the loudest moments — ` +
+        `${wallMsg}. Use "Pin the dive with pose" for a frame-accurate dive, or step through and mark by hand.`
+    );
   };
 
   const wallLine = (a) =>
@@ -364,7 +386,11 @@ export default function App() {
       ? `The wall is a guess (±${a.touch.unc} frames) — step to it and confirm. `
       : `Tap a candidate near the finish and mark the wall yourself. `;
 
-  const runDivePose = async (r, effFps, a) => {
+  const runDivePose = async () => {
+    const r = result;
+    const effFps = effFpsRef.current;
+    const a = auto;
+    if (!r) return;
     let mod;
     try {
       mod = await import("./dive-pose.js");
@@ -631,18 +657,18 @@ export default function App() {
   };
 
   const MARKS = [
-    { key: "dive", label: "Dive in", sub: "feet leave the deck", val: dive, set: setDive, c: "var(--water)" },
-    { key: "turn", label: "Turn", sub: "far wall — hand or push-off", val: turn, set: setTurn, c: "var(--amber)" },
-    { key: "touch", label: "Touch", sub: "hand hits the wall", val: touch, set: setTouch, c: "var(--pennant)" },
+    { key: "dive", label: "Dive in", sub: "feet leave the deck", val: dive, set: setDive, c: "#fff" },
+    { key: "turn", label: "Turn", sub: "far wall — hand or push-off", val: turn, set: setTurn, c: "#999" },
+    { key: "touch", label: "Touch", sub: "hand hits the wall", val: touch, set: setTouch, c: "#ccc" },
   ];
 
   return (
     <div className="pool">
       <div className="app-header">
-        <div className="app-logo">🏊</div>
+        <div className="app-logo">▶</div>
         <div>
-          <div className="app-title">Swim Timer</div>
-          <div className="app-subtitle">Dive to touch · frame-accurate</div>
+          <div className="app-title">SWIM TIMER</div>
+          <div className="app-subtitle">dive to touch // frame-accurate</div>
         </div>
       </div>
       <canvas ref={canvasRef} style={{ display: "none" }} />
@@ -719,7 +745,7 @@ export default function App() {
                 onPointerDown={onRailDown} onPointerMove={onRailMove} onKeyDown={onRailKey}>
                 {result && (
                   <svg className="trace" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
-                    <path d={tracePath()} fill="rgba(47,212,228,.28)" stroke="var(--water)" strokeWidth="0.4" vectorEffect="non-scaling-stroke" />
+                    <path d={tracePath()} fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.4)" strokeWidth="0.4" vectorEffect="non-scaling-stroke" />
                   </svg>
                 )}
                 <div className="cord" />
@@ -773,6 +799,9 @@ export default function App() {
 
               {result && (
                 <div className="row">
+                  <button className="btn ghost" onClick={runDivePose} disabled={scanning || posePct != null || linesPct != null}>
+                    {posePct != null ? `Pinning the dive ${Math.round(posePct * 100)}%` : "Pin the dive with pose"}
+                  </button>
                   <button className="btn ghost" onClick={runLines} disabled={scanning || posePct != null || linesPct != null}>
                     {linesPct != null ? `Reading the walls ${Math.round(linesPct * 100)}%` : "Side-on? Detect wall crossings"}
                   </button>
