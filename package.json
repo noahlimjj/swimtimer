@@ -1,5 +1,5 @@
 {
-  "name": "swimmingtimer",
+  "name": "swimtimer",
   "version": "1.0.0",
   "description": "Frame-accurate swim timing from phone video — dive to touch, two lengths.",
   "type": "module",
