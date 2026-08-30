@@ -336,49 +336,55 @@ export default function App() {
     setResult(r);
     const snapped = [24, 25, 30, 50, 60, 120, 240].reduce((a, b) => (Math.abs(b - effFps) < Math.abs(a - effFps) ? b : a));
     if (Math.abs(snapped - fps) > 3) setFps(snapped);
-    const uncFps = snapped; // uncertainties are quoted in frames of the real rate, not the scan's sample rate
 
-    /* --- best-effort marks from the motion scan alone --------------------
-       The dive here is only a seed so the timeline isn't empty; the pose pass
-       below replaces it when it can see the swimmer on the deck. The wall is
-       the latest candidate that isn't in the last 15% of the steady window —
-       that tail is post-touch climb-out, which from a corner camera is louder
-       than the finish. The ± spans the whole late cluster of candidates, so a
-       clip where the finish can't be told from the climb-out gets an honestly
-       wide figure rather than a precise wrong one. Never asserted. */
-    const span = Math.max(0.001, r.steadyTo - r.steadyFrom);
-    const climbOutFrom = r.steadyTo - 0.15 * span;
-    const wallCands = r.candidates.filter((c) => c.t < climbOutFrom && c.t > r.steadyFrom + 0.35 * span);
-    const wall = wallCands.length ? wallCands[wallCands.length - 1] : null;
+    /* --- place the marks straight away so the scan hands back a time ------
+       detect() picks the dive and the touch off the loudest moments in the
+       water (step 6 there). Both are a rough read of the motion signal, not a
+       frame-accurate call — the ± reflects that, and "Pin the dive with pose"
+       tightens the dive to ±2 frames. The wall stays a hand check. */
     let nextAuto = { ...EMPTY_AUTO };
-    if (wall) {
-      const clusterSpan = wall.t - wallCands[0].t;
-      const nextGap = r.candidates.filter((c) => c.t > wall.t + 0.05).map((c) => c.t - wall.t);
-      const uncS = Math.max(clusterSpan / 2, nextGap.length ? Math.min(...nextGap) / 2 : 0, 0.27);
-      nextAuto.touch = { source: "guess", unc: Math.round(uncS * uncFps) };
-      setTouch(wall.t);
+    effFpsRef.current = effFps;
+    let autoDive = r.dive;
+    let autoTouch = r.touch;
+
+    /* If there's a training history, use its median total as a prior: snap the
+       touch to whichever candidate lands closest to dive + that time. Cheap way
+       to lean on "my two lengths are always about 13.5s". */
+    if (autoDive != null && swims.length >= 2 && r.candidates.length) {
+      const totals = swims.map((s) => s.total).filter((x) => x > 0).sort((a, b) => a - b);
+      const med = totals[totals.length >> 1];
+      if (med > 3) {
+        const target = autoDive + med;
+        const near = r.candidates
+          .filter((c) => c.t > autoDive + 1)
+          .reduce((best, c) => (best && Math.abs(best.t - target) <= Math.abs(c.t - target) ? best : c), null);
+        if (near) autoTouch = near.t;
+      }
     }
-    /* Dive seed: the loudest candidate in the first part of the swim. From a
-       phone propped at the start, the entry splash is a strong early event;
-       further back it isn't, which is why this stays a flagged guess and the
-       pose pass (button below) is offered to pin it. */
-    const early = r.candidates.filter((c) => c.t < r.steadyFrom + 0.45 * span);
-    const diveSeed = (early.length ? early : r.candidates).reduce(
-      (best, c) => (best && best.v >= c.v ? best : c), null);
-    if (diveSeed) {
-      nextAuto.dive = { source: "guess", unc: 30 };
-      setDive(diveSeed.t);
-      seekTo(diveSeed.t);
+
+    if (autoDive != null) {
+      setDive(autoDive);
+      nextAuto.dive = { source: "guess", unc: 12 };
+    }
+    if (autoTouch != null) {
+      setTouch(autoTouch);
+      nextAuto.touch = { source: "guess", unc: 12 };
     }
     setAuto(nextAuto);
-    effFpsRef.current = effFps;
-    const wallMsg = wall
-      ? `the wall is a guess (±${nextAuto.touch.unc} frames) — step to it and confirm`
-      : `no clear finish in the water — tap a candidate near the touch and mark it`;
-    setNote(
-      `Scanned in ${(elapsed / 1000).toFixed(1)}s. Dive and wall are guesses from the loudest moments — ` +
-        `${wallMsg}. Use "Pin the dive with pose" for a frame-accurate dive, or step through and mark by hand.`
-    );
+    if (autoDive != null) seekTo(autoDive);
+
+    if (autoDive != null && autoTouch != null) {
+      setNote(
+        `Scanned in ${(elapsed / 1000).toFixed(1)}s — ${(autoTouch - autoDive).toFixed(2)}s, dive to touch. ` +
+          `Both marks are from the loudest splashes (± a few tenths). "Pin the dive with pose" tightens the ` +
+          `dive; step through and re-mark either if they look off.`
+      );
+    } else {
+      setNote(
+        `Scanned in ${(elapsed / 1000).toFixed(1)}s. Couldn't pick out a clean dive and finish — tap a ` +
+          `candidate below to jump there and mark Dive / Touch by hand.`
+      );
+    }
   };
 
   const wallLine = (a) =>
@@ -651,7 +657,7 @@ export default function App() {
     if (s.source === "hand") return "marked by hand";
     if (s.source === "pose") return `from the on-deck pose · ±${s.unc} frames`;
     if (s.source === "lines") return `from the wall crossing · ±${s.unc} frames`;
-    if (s.source === "guess") return `guess from the motion scan · ±${s.unc} frames — check this`;
+    if (s.source === "guess") return `from the scan · ±${s.unc} frames · adjust if it looks off`;
     if (key === "turn") return "not auto-placed — mark it if you want splits";
     return "not found — tap a candidate below and mark it";
   };
@@ -709,7 +715,7 @@ export default function App() {
             {total != null && (
               <div className="pm mono">
                 ± {(totalUncS ?? frameMs / 1000).toFixed(2)}s
-                {shaky ? " — the wall or the dive is still a guess" : ` at ${fps} fps`}
+                {shaky ? " — from the scan; refine below if it matters" : ` at ${fps} fps`}
               </div>
             )}
             <div className="splits">
