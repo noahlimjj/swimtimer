@@ -1,140 +1,25 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { detect } from "./detect.js";
 
-/* ---------------------------------------------------------------------------
-   Detection pipeline. Every rule here was validated against real clips; the
-   comments say which failure each one fixes.
-   --------------------------------------------------------------------------- */
+/* The analysis pipeline lives in ./detect.js — pure JS, no React, so it can be
+   scored against fixtures offline (tools/score.mjs). Everything below is the
+   player, the scan that feeds detect(), and the UI. */
 
 const SCAN_W = 64;        // analysis grid width
 const SCAN_RATE = 16;     // playback multiplier during the scan
-const CAM_FRAC = 0.25;    // share of pixels changing that means the phone moved
-const CAM_MARGIN = 0.45;  // seconds of margin around handled frames
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
-const pct = (a, p) => {
-  const s = Float32Array.from(a).sort();
-  return s[clamp(Math.floor((p / 100) * s.length), 0, s.length - 1)];
-};
-
-function detect(samples, fps) {
-  // samples: [{t, frac, cells:Float32Array}]  cells = per-cell abs difference
-  const n = samples.length;
-  if (n < 20) return { error: "Too few frames to read. Try again." };
-
-  /* 1. Camera-handling gate.
-     A person walking through frame changes a minority of pixels; the phone
-     being set down or picked up changes most of them. An earlier version
-     watched only the top of the frame for this, and threw away a whole dive
-     because the swimmer's back filled the sky. Counting the share of changed
-     pixels across the whole frame separates the two cleanly. */
-  const steady = samples.map((s) => s.frac <= CAM_FRAC);
-  const k = Math.max(1, Math.round(CAM_MARGIN * fps));
-  const gated = steady.slice();
-  for (let i = 0; i < n; i++)
-    if (!steady[i])
-      for (let j = Math.max(0, i - k); j <= Math.min(n - 1, i + k); j++) gated[j] = false;
-  const stableIdx = [];
-  for (let i = 0; i < n; i++) if (gated[i]) stableIdx.push(i);
-  if (stableIdx.length < fps * 2)
-    return { error: "The camera moves for nearly the whole clip. Prop the phone up and reshoot." };
-
-  /* 2. Water region: cells whose brightness varies over the steady frames.
-     Deck and sky barely vary; the pool does. Measuring motion only inside it
-     keeps deck movement from competing with the swim. */
-  const cellCount = samples[0].cells.length;
-  const mean = new Float32Array(cellCount);
-  const varr = new Float32Array(cellCount);
-  for (const i of stableIdx) for (let c = 0; c < cellCount; c++) mean[c] += samples[i].cells[c];
-  for (let c = 0; c < cellCount; c++) mean[c] /= stableIdx.length;
-  for (const i of stableIdx)
-    for (let c = 0; c < cellCount; c++) {
-      const d = samples[i].cells[c] - mean[c];
-      varr[c] += d * d;
-    }
-  const vcut = pct(varr, 60);
-  const roi = [];
-  for (let c = 0; c < cellCount; c++) if (varr[c] > vcut) roi.push(c);
-  if (roi.length < 20) return { error: "Couldn't find the water. Get more of the pool in frame." };
-
-  /* 3. Water motion per frame. */
-  const e = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    let s = 0;
-    for (const c of roi) s += samples[i].cells[c];
-    e[i] = s / roi.length;
-  }
-  const eStable = stableIdx.map((i) => e[i]);
-  /* Baseline from a low percentile, not the median. The median is dominated by
-     the swim itself in a clip that is mostly swimming, which pushed the
-     threshold above the swim and split it into fragments. */
-  const base = pct(eStable, 10);
-  const hi = pct(eStable, 97);
-  const thr = base + 0.3 * (hi - base);
-
-  /* 4. The swim is the longest sustained run of disturbed water. A swimmer
-     walking into frame makes a louder spike than the dive, but it does not
-     sustain, so it loses to the swim on length. */
-  const gap = Math.round(0.6 * fps);
-  const runs = [];
-  let cur = null;
-  for (let i = 0; i < n; i++) {
-    const active = e[i] > thr && gated[i];
-    if (active) cur = cur ? [cur[0], i] : [i, i];
-    else if (cur && i - cur[1] > gap) {
-      runs.push(cur);
-      cur = null;
-    }
-  }
-  if (cur) runs.push(cur);
-  const long = runs.filter((r) => (r[1] - r[0]) / fps > 1.5);
-  const [s0, s1] = long.length
-    ? long.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a))
-    : [stableIdx[0], stableIdx[stableIdx.length - 1]];
-
-  /* 5. Candidate events, ranked by loudness and spread out in time.
-
-     This deliberately does NOT name one of them the dive and another the touch.
-     Rules that did that were tested against four clips shot from three camera
-     positions and none survived: the entry splash is the loudest thing in frame
-     when the phone is close to the start, and one of the quietest when it is
-     further back, so "loudest peak near the start of the swim" picks the dive
-     on one clip and mid-pool thrashing on the next. Ranked candidates are what
-     the signal actually supports — they cut a 35-second clip down to three
-     places worth looking, and the call stays with the person watching. */
-  const order = Array.from({ length: s1 - s0 + 1 }, (_, i) => s0 + i)
-    .filter((i) => gated[i])
-    .sort((a, b) => e[b] - e[a]);
-  const spread = Math.round(1.2 * fps);
-  const peaks = [];
-  for (const i of order) {
-    if (peaks.every((p) => Math.abs(p - i) > spread)) peaks.push(i);
-    if (peaks.length === 4) break;
-  }
-  /* For each peak, walk back to where its rise began. On a splash the leading
-     edge sits closer to the event than the peak does, since the peak is water
-     still flying after the swimmer has already arrived. */
-  const cands = peaks.map((i) => {
-    const foot = base + 0.6 * (e[i] - base);
-    let j = i;
-    while (j > s0 && e[j - 1] > foot) j--;
-    return { t: samples[j].t, peak: samples[i].t, v: e[i] };
-  });
-  cands.sort((a, b) => a.t - b.t);
-
-  return {
-    steadyFrom: samples[stableIdx[0]].t,
-    steadyTo: samples[stableIdx[stableIdx.length - 1]].t,
-    swim: [samples[s0].t, samples[s1].t],
-    candidates: cands,
-    trace: samples.map((s, i) => ({ t: s.t, v: e[i], ok: gated[i] })),
-    roiFrac: roi.length / cellCount,
-  };
-}
-
-/* ------------------------------------------------------------------------- */
 
 const SPEEDS = [1, 0.5, 0.25, 0.1];
 const ZOOMS = [1, 2, 3];
+
+/* Provenance of each mark. source: null (unset) | 'pose' | 'guess' | 'hand';
+   unc = ± frames the app will stand behind. Rebuilt fresh on every clip / scan. */
+const EMPTY_AUTO = {
+  dive: { source: null, unc: null },
+  turn: { source: null, unc: null },
+  touch: { source: null, unc: null },
+};
 const COURSES = [
   { id: "50m", label: "50 m", metres: 50 },
   { id: "100m", label: "100 m", metres: 100 },
@@ -200,8 +85,15 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const [scanPct, setScanPct] = useState(0);
   const [scanMs, setScanMs] = useState(null);
+  const [scanRate, setScanRate] = useState(SCAN_RATE); // dropped to 8x on a device that can't keep up
+  const [droppedFrames, setDroppedFrames] = useState(false);
   const [note, setNote] = useState(null);
-  const [review, setReview] = useState(null); // 'dive' | 'touch' | null
+
+  /* How each mark got its value — see EMPTY_AUTO. source: null | 'pose' | 'guess' | 'hand',
+     unc is the ± in frames the app will stand behind for that mark. */
+  const [auto, setAuto] = useState(EMPTY_AUTO);
+  const [posePct, setPosePct] = useState(null); // null = not running, 0..1 = finding the dive
+  const [linesPct, setLinesPct] = useState(null); // null = not running, 0..1 = wall-crossing pass
 
   const [course, setCourse] = useState("50m");
   const [swims, setSwims] = useState([]);
@@ -262,8 +154,11 @@ export default function App() {
     setZoom(1);
     setPan({ x: 0, y: 0 });
     setNote(null);
-    setReview(null);
+    setAuto(EMPTY_AUTO);
+    setPosePct(null);
     setScanMs(null);
+    setDroppedFrames(false);
+    setScanRate(SCAN_RATE);
     e.target.value = "";
   };
 
@@ -293,9 +188,11 @@ export default function App() {
     }
   };
 
+  const busy = () => scanning || posePct != null || linesPct != null;
+
   const step = (frames) => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || busy()) return;
     pause();
     const target = clamp(v.currentTime + frames / fps, 0, duration || 0);
     v.currentTime = target;
@@ -306,7 +203,7 @@ export default function App() {
 
   const togglePlay = () => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || busy()) return;
     if (v.paused) {
       v.playbackRate = speed;
       v.play().catch(() => setDecodeError(true));
@@ -316,18 +213,20 @@ export default function App() {
 
   const mark = (which) => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || busy()) return;
     const t = v.currentTime;
     ({ dive: setDive, turn: setTurn, touch: setTouch })[which](t);
     setFlash((n) => n + 1);
-    if (review === which) setReview(which === "dive" ? "touch" : null);
+    setAuto((a) => ({ ...a, [which]: { ...a[which], source: "hand", unc: 0 } })); // a hand mark overrides the auto call
   };
 
   /* --- the scan -----------------------------------------------------------
-     One pass, at 16x playback into a 64px canvas. The old version played at 4x
-     and did the arithmetic on full RGBA; this reads luma only and skips the
-     per-frame allocation, which is where the time was going. */
-  const runScan = async () => {
+     One muted pass at `rate`x into a 64px canvas, luma only. Two Uint8 luma
+     grids are reused frame to frame (ping-pong); the only per-frame allocation
+     is the retained diff grid, now Uint8 (~8 MB for a 37s clip, a quarter of
+     the old Float32). If the device can't sample every frame at this rate the
+     scan detects the shortfall and retries once at 8x. */
+  const runScan = async (rate = scanRate) => {
     const v = videoRef.current;
     const c = canvasRef.current;
     if (!v || !c || !duration) return;
@@ -340,6 +239,7 @@ export default function App() {
     setScanPct(0);
     setNote(null);
     setResult(null);
+    setDroppedFrames(false);
     pause();
 
     const H = Math.max(24, Math.round(SCAN_W * (v.videoHeight / v.videoWidth || 1.5)));
@@ -348,26 +248,27 @@ export default function App() {
     const ctx = c.getContext("2d", { willReadFrequently: true, alpha: false });
     const N = SCAN_W * H;
     const samples = [];
-    let prev = null;
+    let gNow = new Uint8Array(N);   // this frame's luma
+    let gPrev = new Uint8Array(N);  // previous frame's luma
+    let havePrev = false;
     let detectedFps = null;
     let lastT = null;
 
     v.currentTime = 0;
     v.muted = true;
-    v.playbackRate = SCAN_RATE;
+    v.playbackRate = rate;
 
     await new Promise((done) => {
       const onFrame = (now, meta) => {
         ctx.drawImage(v, 0, 0, SCAN_W, H);
         const px = ctx.getImageData(0, 0, SCAN_W, H).data;
-        const g = new Float32Array(N);
         for (let i = 0, j = 0; j < N; i += 4, j++)
-          g[j] = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
-        if (prev) {
-          const cells = new Float32Array(N);
+          gNow[j] = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+        if (havePrev) {
+          const cells = new Uint8Array(N);
           let changed = 0;
           for (let j = 0; j < N; j++) {
-            const d = Math.abs(g[j] - prev[j]);
+            const d = gNow[j] > gPrev[j] ? gNow[j] - gPrev[j] : gPrev[j] - gNow[j];
             cells[j] = d;
             if (d > 12) changed++;
           }
@@ -378,13 +279,14 @@ export default function App() {
           }
           lastT = meta.mediaTime;
         }
-        prev = g;
+        havePrev = true;
+        const tmp = gPrev; gPrev = gNow; gNow = tmp; // this frame becomes next frame's prev
         setScanPct(clamp(meta.mediaTime / duration, 0, 1));
         if (v.ended || meta.mediaTime >= duration - 0.05) return done();
         v.requestVideoFrameCallback(onFrame);
       };
       v.play().then(() => v.requestVideoFrameCallback(onFrame), () => done());
-      setTimeout(done, Math.min(90000, (duration / SCAN_RATE) * 1000 + 15000));
+      setTimeout(done, Math.min(90000, (duration / rate) * 1000 + 15000));
     });
 
     v.pause();
@@ -392,24 +294,221 @@ export default function App() {
     setPlaying(false);
     setScanning(false);
     setScanPct(0);
-    setScanMs(Math.round(performance.now() - t0));
+    const elapsed = Math.round(performance.now() - t0);
+    setScanMs(elapsed);
 
-    const eff = detectedFps && detectedFps > 10 ? detectedFps : 30;
-    const sampleFps = samples.length / Math.max(duration, 0.001);
-    const r = detect(samples, sampleFps);
+    /* One frame-rate notion: the EMA of real inter-frame gaps in mediaTime.
+       samples.length/duration undercounts every time a frame is dropped; the
+       old code fed that undercount to detect() while driving the UI off the
+       EMA — two different numbers for the same thing. */
+    const emaFps = detectedFps && detectedFps > 10 ? detectedFps : null;
+    const effFps = emaFps || samples.length / Math.max(duration, 0.001) || 30;
+
+    /* Dropped-frame guard. Expect roughly duration*fps samples; well short of
+       that means the device couldn't keep up at this rate. Retry once at 8x. */
+    const expected = duration * (emaFps || 30);
+    if (samples.length < 0.6 * expected) {
+      setDroppedFrames(true);
+      if (rate > 8) {
+        setNote(`Only ${samples.length} of ~${Math.round(expected)} frames came through at ${rate}x — retrying at 8x.`);
+        setScanRate(8);
+        return runScan(8);
+      }
+      setNote(`Still dropping frames at ${rate}x (${samples.length} of ~${Math.round(expected)}). The trace and times below are coarser than the frame rate suggests.`);
+    }
+
+    const r = detect(samples, effFps);
     if (r.error) {
       setNote(r.error);
       return;
     }
     setResult(r);
-    if (Math.abs(eff - fps) > 3)
-      setFps([24, 25, 30, 50, 60, 120, 240].reduce((a, b) => (Math.abs(b - eff) < Math.abs(a - eff) ? b : a)));
-    if (r.candidates.length) seekTo(r.candidates[0].t);
-    setNote(
-      `Scanned in ${((performance.now() - t0) / 1000).toFixed(1)}s. These are the loudest moments in ` +
-        `the water — the dive and the wall are usually among them, but which is which depends on where ` +
-        `the phone was, so tap through and mark them yourself.`
-    );
+    const snapped = [24, 25, 30, 50, 60, 120, 240].reduce((a, b) => (Math.abs(b - effFps) < Math.abs(a - effFps) ? b : a));
+    if (Math.abs(snapped - fps) > 3) setFps(snapped);
+    const uncFps = snapped; // uncertainties are quoted in frames of the real rate, not the scan's sample rate
+
+    /* --- best-effort marks from the motion scan alone --------------------
+       The dive here is only a seed so the timeline isn't empty; the pose pass
+       below replaces it when it can see the swimmer on the deck. The wall is
+       the latest candidate that isn't in the last 15% of the steady window —
+       that tail is post-touch climb-out, which from a corner camera is louder
+       than the finish. The ± spans the whole late cluster of candidates, so a
+       clip where the finish can't be told from the climb-out gets an honestly
+       wide figure rather than a precise wrong one. Never asserted. */
+    const span = Math.max(0.001, r.steadyTo - r.steadyFrom);
+    const climbOutFrom = r.steadyTo - 0.15 * span;
+    const wallCands = r.candidates.filter((c) => c.t < climbOutFrom && c.t > r.steadyFrom + 0.35 * span);
+    const wall = wallCands.length ? wallCands[wallCands.length - 1] : null;
+    let nextAuto = { ...EMPTY_AUTO };
+    if (wall) {
+      const clusterSpan = wall.t - wallCands[0].t;
+      const nextGap = r.candidates.filter((c) => c.t > wall.t + 0.05).map((c) => c.t - wall.t);
+      const uncS = Math.max(clusterSpan / 2, nextGap.length ? Math.min(...nextGap) / 2 : 0, 0.27);
+      nextAuto.touch = { source: "guess", unc: Math.round(uncS * uncFps) };
+      setTouch(wall.t);
+    }
+    if (r.candidates.length) {
+      nextAuto.dive = { source: "guess", unc: 30 };
+      setDive(r.candidates[0].t);
+      seekTo(r.candidates[0].t);
+    }
+    setAuto(nextAuto);
+    setNote(`Scanned in ${(elapsed / 1000).toFixed(1)}s. Looking for the dive…`);
+
+    /* --- pose pass: the one event that generalises across camera angles --- */
+    await runDivePose(r, effFps, nextAuto);
+  };
+
+  const wallLine = (a) =>
+    a.touch.source === "guess"
+      ? `The wall is a guess (±${a.touch.unc} frames) — step to it and confirm. `
+      : `Tap a candidate near the finish and mark the wall yourself. `;
+
+  const runDivePose = async (r, effFps, a) => {
+    let mod;
+    try {
+      mod = await import("./dive-pose.js");
+    } catch {
+      setNote(`Pose model unavailable here, so the dive is a guess from the loudest early moment. ${wallLine(a)}`);
+      return;
+    }
+    const v = videoRef.current;
+    if (!v || !mod?.detectDive) {
+      setNote(`Pose model unavailable here, so the dive is a guess from the loudest early moment. ${wallLine(a)}`);
+      return;
+    }
+    // the scan just played to the end; rewind and land a real frame before the
+    // pose pass so its first seeks don't read a stale/blank buffer
+    try {
+      v.pause();
+      v.currentTime = Math.max(0, r.steadyFrom);
+      await new Promise((res) => {
+        const to = setTimeout(res, 1500);
+        v.requestVideoFrameCallback(() => { clearTimeout(to); res(); });
+      });
+    } catch { /* best effort */ }
+    setPosePct(0);
+    let slow = false;
+    try {
+      // phases arrive as "localize" (0–0.3) → "coarse" (0.3–0.6) → "fine" (0.6–1)
+      const phaseBase = { localize: 0, coarse: 0.3, fine: 0.6 };
+      const phaseSpan = { localize: 0.3, coarse: 0.3, fine: 0.4 };
+      const hit = await mod.detectDive({
+        video: v,
+        fps: effFps,
+        searchFrom: Math.max(0, r.steadyFrom),
+        searchTo: r.steadyTo,
+        onProgress: ({ phase, done, total, slow: s }) => {
+          if (s) slow = true;
+          const b = phaseBase[phase] ?? 0;
+          const sp = phaseSpan[phase] ?? 1;
+          setPosePct(total ? clamp(b + sp * (done / total), 0, 1) : b);
+        },
+      });
+      const slowNote = slow ? " (ran on the slow CPU path — no graphics acceleration here)" : "";
+      if (hit && hit.t != null) {
+        setDive(hit.t);
+        setAuto((prev) => ({ ...prev, dive: { source: "pose", unc: hit.uncertaintyFrames ?? 2 } }));
+        seekTo(hit.t);
+        setNote(`Dive placed from the on-deck pose (±${hit.uncertaintyFrames ?? 2} frames)${slowNote}. ${wallLine(a)}The turn isn't auto-placed — the far wall is too far from this camera.`);
+      } else {
+        // keep the motion-scan seed (already flagged 'guess'); pose just couldn't improve it
+        setNote(`Couldn't see the swimmer on the deck. The dive is a guess from the loudest early moment — check it. ${wallLine(a)}`);
+      }
+    } catch {
+      setNote(`The pose pass failed, so the dive is a guess from the loudest early moment. ${wallLine(a)}`);
+    } finally {
+      setPosePct(null);
+      const vv = videoRef.current;
+      if (vv) {
+        vv.pause();
+        vv.playbackRate = speed;
+        setPlaying(false);
+      }
+    }
+  };
+
+  /* --- wall-crossing pass (opt-in) ---------------------------------------
+     Only useful when the clip is shot side-on with both end walls in frame
+     and the water line roughly horizontal. It can't be told from the loudness
+     signal whether a clip is like that, so this runs on request rather than on
+     every scan, and it captures its own wider (~160px) frame stack. When the
+     geometry cooperates it places all three events; otherwise it says why. */
+  const runLines = async () => {
+    const v = videoRef.current;
+    const c = canvasRef.current;
+    if (!v || !c || !duration || !v.requestVideoFrameCallback) return;
+    let mod;
+    try {
+      mod = await import("./detect-lines.js");
+    } catch {
+      setNote("Wall-crossing detection isn't available in this build.");
+      return;
+    }
+    setLinesPct(0);
+    pause();
+
+    const W = 160;
+    const H = Math.max(24, Math.round(W * (v.videoHeight / v.videoWidth || 1.5)));
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext("2d", { willReadFrequently: true, alpha: false });
+    const N = W * H;
+    const stride = Math.max(1, Math.round((duration * 30) / 1400)); // cap the stack near 1400 frames
+    const stack = [];
+    let f = 0;
+
+    v.currentTime = 0;
+    v.muted = true;
+    v.playbackRate = SCAN_RATE;
+    await new Promise((done) => {
+      const onFrame = (now, meta) => {
+        if (f++ % stride === 0) {
+          ctx.drawImage(v, 0, 0, W, H);
+          const px = ctx.getImageData(0, 0, W, H).data;
+          const g = new Uint8Array(N);
+          for (let i = 0, j = 0; j < N; i += 4, j++)
+            g[j] = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+          stack.push({ data: g, t: meta.mediaTime });
+        }
+        setLinesPct(clamp(meta.mediaTime / duration, 0, 1));
+        if (v.ended || meta.mediaTime >= duration - 0.05) return done();
+        v.requestVideoFrameCallback(onFrame);
+      };
+      v.play().then(() => v.requestVideoFrameCallback(onFrame), () => done());
+      setTimeout(done, Math.min(90000, (duration / SCAN_RATE) * 1000 + 15000));
+    });
+    v.pause();
+    v.playbackRate = speed;
+    setPlaying(false);
+    setLinesPct(null);
+
+    try {
+      const fps = stack.length / Math.max(duration, 0.001);
+      const r = mod.detectLines(
+        { count: stack.length, width: W, height: H, fps, at: (i) => stack[i].data, t: (i) => stack[i].t },
+        {}
+      );
+      const got = [];
+      const place = (k, val, setter) => {
+        if (val == null) return;
+        setter(val);
+        const uncFrames = Math.max(2, Math.round((r.uncertainty?.[k] ?? 0.2) * fps));
+        setAuto((prev) => ({ ...prev, [k]: { source: "lines", unc: uncFrames } }));
+        got.push(k);
+      };
+      place("dive", r.dive, setDive);
+      place("turn", r.turn, setTurn);
+      place("touch", r.touch, setTouch);
+      if (got.length) {
+        if (r.dive != null) seekTo(r.dive);
+        setNote(`Wall crossings found — placed ${got.join(", ")} from where the swimmer crosses the end-wall lines. Step to each and confirm.`);
+      } else {
+        setNote(`No usable wall geometry in this clip: ${r.diagnostics?.reason || (r.notes || []).join(" ") || "the end walls aren't both visible with the water line level."}`);
+      }
+    } catch (err) {
+      setNote("Wall-crossing detection couldn't read this clip.");
+    }
   };
 
   /* --- pan / rail --------------------------------------------------------- */
@@ -420,7 +519,7 @@ export default function App() {
     return clamp((e.clientX - r.left) / r.width, 0, 1);
   };
   const onRailDown = (e) => {
-    if (!duration || scanning) return;
+    if (!duration || busy()) return;
     pause();
     e.currentTarget.setPointerCapture(e.pointerId);
     seekTo(ratioFrom(e) * duration);
@@ -445,8 +544,14 @@ export default function App() {
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) p.moved = true;
     p.x = e.clientX; p.y = e.clientY;
-    const lim = (zoom - 1) * 50;
-    setPan((o) => ({ x: clamp(o.x + dx / 3, -lim, lim), y: clamp(o.y + dy / 3, -lim, lim) }));
+    /* The transform is scale() then translate(), so translate is in pre-scale
+       units: a dx-pixel drag moves the frame dx/zoom. Max offset before the
+       edge shows is half the overflow, also in pre-scale units. Fall back to
+       the old crude constant only if the box hasn't measured yet. */
+    const el = videoRef.current;
+    const limX = el?.clientWidth ? ((zoom - 1) / (2 * zoom)) * el.clientWidth : (zoom - 1) * 50;
+    const limY = el?.clientHeight ? ((zoom - 1) / (2 * zoom)) * el.clientHeight : (zoom - 1) * 50;
+    setPan((o) => ({ x: clamp(o.x + dx / zoom, -limX, limX), y: clamp(o.y + dy / zoom, -limY, limY) }));
   };
   const onStageUp = () => {
     if (!panRef.current.moved) togglePlay();
@@ -463,9 +568,46 @@ export default function App() {
   const bestTime = swims.length ? Math.min(...swims.map((s) => s.total)) : null;
   const frameMs = 1000 / fps;
 
+  /* The ± on the total is the two end marks' uncertainty added in quadrature,
+     never finer than one frame. A hand mark contributes one frame; a pose mark
+     ~2; a motion-scan guess whatever the scan was willing to stand behind. */
+  const markUncS = (k) => Math.max(1, auto[k].source === "hand" ? 1 : auto[k].unc || 1) * (frameMs / 1000);
+  const totalUncS = valid ? Math.hypot(markUncS("dive"), markUncS("touch")) : null;
+  const shaky = valid && (auto.dive.source === "guess" || auto.touch.source === "guess");
+
   const saveSwim = () => {
     if (!valid) return;
     persist([{ id: Date.now(), total, lap1, lap2, course, when: new Date().toISOString(), file: fileName || "clip" }, ...swims].slice(0, 40));
+  };
+
+  const [exported, setExported] = useState(false);
+  const exportSwims = async () => {
+    if (!swims.length) return;
+    const head = "when,course,total,length1,length2,per100,file";
+    const rows = swims.map((s) => {
+      const m = COURSES.find((c) => c.id === s.course)?.metres;
+      const per100 = m ? ((s.total / m) * 100).toFixed(2) : "";
+      return [s.when, s.course, s.total?.toFixed(2) ?? "", s.lap1?.toFixed(2) ?? "",
+        s.lap2?.toFixed(2) ?? "", per100, `"${(s.file || "").replace(/"/g, '""')}"`].join(",");
+    });
+    const csv = [head, ...rows].join("\n");
+    try {
+      await navigator.clipboard.writeText(csv);
+      setExported(true);
+      setTimeout(() => setExported(false), 2000);
+    } catch {
+      /* clipboard blocked — fall back to a download where the sandbox allows it */
+      try {
+        const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "swims.csv";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch {
+        setNote("Couldn't copy or download the log in this browser.");
+      }
+    }
   };
 
   const p = (t) => (duration ? clamp((t / duration) * 100, 0, 100) : 0);
@@ -477,9 +619,20 @@ export default function App() {
     return `M0,26 L${pts.join(" L")} L100,26 Z`;
   };
 
+  /* One line of provenance per mark: how it was placed and how far to trust it. */
+  const markStatus = (key) => {
+    const s = auto[key];
+    if (s.source === "hand") return "marked by hand";
+    if (s.source === "pose") return `from the on-deck pose · ±${s.unc} frames`;
+    if (s.source === "lines") return `from the wall crossing · ±${s.unc} frames`;
+    if (s.source === "guess") return `guess from the motion scan · ±${s.unc} frames — check this`;
+    if (key === "turn") return "not auto-placed — mark it if you want splits";
+    return "not found — tap a candidate below and mark it";
+  };
+
   const MARKS = [
     { key: "dive", label: "Dive in", sub: "feet leave the deck", val: dive, set: setDive, c: "var(--water)" },
-    { key: "turn", label: "Turn", sub: "not auto-detected — mark it if you want splits", val: turn, set: setTurn, c: "var(--amber)" },
+    { key: "turn", label: "Turn", sub: "far wall — hand or push-off", val: turn, set: setTurn, c: "var(--amber)" },
     { key: "touch", label: "Touch", sub: "hand hits the wall", val: touch, set: setTouch, c: "var(--pennant)" },
   ];
 
@@ -536,10 +689,12 @@ export default function App() {
 .marks{display:grid;gap:8px;margin-top:16px}
 .mark{border:1px solid var(--line);border-radius:12px;background:var(--deck);padding:10px 10px 10px 14px;
   display:flex;align-items:center;gap:8px;position:relative;overflow:hidden}
-.mark.focus{border-color:var(--c);background:#16323d}
+.mark.ok{border-color:var(--c);background:#16323d}
+.mark.guess{border-color:var(--amber);background:#241f16}
 .mark::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
 .mark .who{flex:1;min-width:0}
 .mark .who b{display:block;font-size:14px}
+.mark .who b .val{color:var(--c);font-weight:600}
 .mark .who span{font-size:11.5px;color:var(--muted)}
 .mini{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:9px;padding:9px 10px;
   font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;flex:none}
@@ -582,7 +737,12 @@ export default function App() {
           <div className="board">
             <div className="eyebrow">Total</div>
             <span key={flash} className={`mono clock ${total ? "hit" : "dim"}`}>{clockText(total)}</span>
-            {total != null && <div className="pm mono">± {(frameMs / 1000).toFixed(2)}s at {fps} fps</div>}
+            {total != null && (
+              <div className="pm mono">
+                ± {(totalUncS ?? frameMs / 1000).toFixed(2)}s
+                {shaky ? " — the wall or the dive is still a guess" : ` at ${fps} fps`}
+              </div>
+            )}
             <div className="splits">
               <div className="split"><div className="eyebrow">Length 1</div><div className="mono v">{clockText(lap1)}</div></div>
               <div className="split"><div className="eyebrow">Length 2</div><div className="mono v">{clockText(lap2)}</div></div>
@@ -611,6 +771,18 @@ export default function App() {
                     transform: `scale(${zoom}) translate(${pan.x}px,${pan.y}px)` }} />
                 <div className="badge mono">{current.toFixed(2)}s</div>
                 {scanning && <div className="scanbar" style={{ width: `${scanPct * 100}%` }} />}
+                {posePct != null && (
+                  <>
+                    <div className="badge mono" style={{ left: "auto", right: 10 }}>finding the dive {Math.round(posePct * 100)}%</div>
+                    <div className="scanbar" style={{ width: `${posePct * 100}%`, background: "var(--amber)" }} />
+                  </>
+                )}
+                {linesPct != null && (
+                  <>
+                    <div className="badge mono" style={{ left: "auto", right: 10 }}>reading the walls {Math.round(linesPct * 100)}%</div>
+                    <div className="scanbar" style={{ width: `${linesPct * 100}%`, background: "var(--amber)" }} />
+                  </>
+                )}
               </div>
 
               <div className="rail" ref={railRef} role="slider" tabIndex={0} aria-label="Video position"
@@ -660,10 +832,24 @@ export default function App() {
               </div>
 
               <div className="row">
-                <button className="btn on" onClick={runScan} disabled={scanning}>
-                  {scanning ? `Reading the water ${Math.round(scanPct * 100)}%` : result ? "Scan again" : "Scan and place marks"}
+                <button className="btn on" onClick={() => runScan()} disabled={scanning || posePct != null || linesPct != null}>
+                  {scanning
+                    ? `Reading the water ${Math.round(scanPct * 100)}%`
+                    : droppedFrames && !result
+                    ? `Scan again at ${scanRate}×`
+                    : result
+                    ? "Scan again"
+                    : "Scan and place marks"}
                 </button>
               </div>
+
+              {result && (
+                <div className="row">
+                  <button className="btn ghost" onClick={runLines} disabled={scanning || posePct != null || linesPct != null}>
+                    {linesPct != null ? `Reading the walls ${Math.round(linesPct * 100)}%` : "Filmed side-on? Detect wall crossings"}
+                  </button>
+                </div>
+              )}
 
               {result?.candidates?.length > 0 && (
                 <div className="row seg" style={{ flexWrap: "wrap" }}>
@@ -678,17 +864,23 @@ export default function App() {
               {note && <div className="note">{note}</div>}
 
               <div className="marks">
-                {MARKS.map((m) => (
-                  <div className={`mark ${review === m.key ? "focus" : ""}`} key={m.key} style={{ "--c": m.c }}>
-                    <div className="who">
-                      <b>{m.label}{review === m.key ? " — confirm this" : ""}</b>
-                      <span className="mono">{m.val != null ? `${m.val.toFixed(2)}s` : "not set"} — {m.sub}</span>
+                {MARKS.map((m) => {
+                  const st = auto[m.key];
+                  const cls = ["pose", "lines", "hand"].includes(st.source) ? "ok" : st.source === "guess" ? "guess" : "";
+                  return (
+                    <div className={`mark ${cls}`} key={m.key} style={{ "--c": m.c }}>
+                      <div className="who">
+                        <b>{m.label}{m.val != null && <span className="mono val"> {m.val.toFixed(2)}s</span>}</b>
+                        <span>{m.sub} · {markStatus(m.key)}</span>
+                      </div>
+                      {m.val != null && <button className="mini" onClick={() => seekTo(m.val)}>Go</button>}
+                      {m.val != null && (
+                        <button className="mini" onClick={() => { m.set(null); setAuto((a) => ({ ...a, [m.key]: { source: null, unc: null } })); }}>Clear</button>
+                      )}
+                      <button className="mini set" style={{ "--c": m.c }} onClick={() => mark(m.key)}>Mark here</button>
                     </div>
-                    {m.val != null && <button className="mini" onClick={() => { seekTo(m.val); setReview(m.key); }}>Go</button>}
-                    {m.val != null && <button className="mini" onClick={() => m.set(null)}>Clear</button>}
-                    <button className="mini set" style={{ "--c": m.c }} onClick={() => mark(m.key)}>Mark</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="row">
@@ -722,7 +914,12 @@ export default function App() {
       )}
 
       <div style={{ marginTop: 24 }}>
-        <div className="eyebrow" style={{ marginBottom: 6 }}>Saved swims {swims.length ? `· ${swims.length}` : ""}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <div className="eyebrow">Saved swims {swims.length ? `· ${swims.length}` : ""}</div>
+          {swims.length > 0 && (
+            <button className="mini" onClick={exportSwims}>{exported ? "Copied ✓" : "Export CSV"}</button>
+          )}
+        </div>
         {swims.length === 0 ? (
           <div className="hint">Nothing saved yet. Scan a clip, confirm the two marks, then save.</div>
         ) : (
