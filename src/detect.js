@@ -145,7 +145,14 @@ export function detect(samples, fps) {
   const usable = cands.filter((c) => c.t > t0 + 0.6);
   const mid = t0 + 0.55 * (tEnd - t0);
   const loudest = (list) => list.reduce((a, b) => (a && a.v >= b.v ? a : b), null);
-  const diveC = loudest(usable.filter((c) => c.t <= mid)) || usable[0] || null;
+
+  const earlyCands = usable.filter((c) => c.t <= mid);
+  const loudEarly = loudest(earlyCands);
+  /* Dive: the *earliest* early candidate that's within ~45% of the loudest —
+     a splash builds to its peak, so its leading edge is the earlier of the two
+     candidates it usually throws, and that edge is nearer the feet leaving. */
+  const diveC =
+    (loudEarly && earlyCands.find((c) => c.v >= 0.45 * loudEarly.v)) || loudEarly || usable[0] || null;
   let dive = diveC ? diveC.t : null;
   const touchC = loudest(usable.filter((c) => c.t > (dive ?? mid) + 1));
   let touch = touchC ? touchC.t : null;
