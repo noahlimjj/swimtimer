@@ -1,0 +1,794 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=VT323&display=swap');
+
+/* ── Retro terminal palette ───────────────────────────────────────── */
+:root {
+  --bg: #0a0a0a;
+  --bg2: #111;
+  --bg3: #181818;
+  --border: #333;
+  --border-hi: #555;
+  --fg: #e0e0e0;
+  --fg2: #999;
+  --fg3: #666;
+  --accent: #fff;
+  --mark-1: #ccc;
+  --mark-2: #888;
+  --mark-3: #aaa;
+  --danger: #ff4444;
+  --ok: #ccc;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── CRT / scanline overlay ───────────────────────────────────────── */
+.pool::after {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.08) 2px,
+      rgba(0, 0, 0, 0.08) 4px
+    );
+  mix-blend-mode: multiply;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────── */
+.pool {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Space Mono', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 12px 48px;
+  position: relative;
+  image-rendering: pixelated;
+}
+
+.mono {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  font-weight: 700;
+}
+
+/* ── App header ───────────────────────────────────────────────────── */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--border);
+}
+
+.app-logo {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.app-title {
+  font-family: 'VT323', monospace;
+  font-size: 24px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.app-subtitle {
+  font-size: 10px;
+  color: var(--fg3);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+/* ── Scoreboard ───────────────────────────────────────────────────── */
+.board {
+  border: 2px solid var(--border);
+  background: var(--bg2);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.clock {
+  font-family: 'VT323', monospace;
+  font-size: clamp(52px, 18vw, 80px);
+  line-height: 0.9;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  display: block;
+  margin: 6px 0 4px;
+  color: var(--accent);
+}
+
+.clock.dim {
+  color: #222;
+}
+
+.clock.hit {
+  animation: blink-on 0.3s steps(1);
+}
+
+@keyframes blink-on {
+  0%, 49% { color: #000; background: var(--accent); }
+  50%, 100% { color: var(--accent); background: transparent; }
+}
+
+.pm {
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 2px;
+}
+
+.splits {
+  display: flex;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.split {
+  flex: 1;
+}
+
+.split + .split {
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+}
+
+.split .v {
+  font-family: 'VT323', monospace;
+  font-size: 24px;
+  font-weight: 400;
+  margin-top: 2px;
+  color: var(--fg);
+}
+
+.warn {
+  color: var(--danger);
+  font-size: 11px;
+  margin-top: 8px;
+  font-weight: 700;
+}
+
+.warn::before {
+  content: '! ';
+}
+
+/* ── Video stage ──────────────────────────────────────────────────── */
+.stage {
+  border: 2px solid var(--border);
+  overflow: hidden;
+  background: #000;
+  position: relative;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage video {
+  width: 100%;
+  display: block;
+  transition: transform 0.1s linear;
+}
+
+.badge {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  font-weight: 400;
+  pointer-events: none;
+  color: var(--fg);
+}
+
+.scanbar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+/* ── Timeline ─────────────────────────────────────────────────────── */
+.rail {
+  margin: 12px 0 4px;
+  height: 76px;
+  position: relative;
+  touch-action: none;
+  outline: none;
+}
+
+.rail:focus-visible .cord {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.trace {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 28px;
+  width: 100%;
+  display: block;
+}
+
+.cord {
+  position: absolute;
+  left: 0; right: 0;
+  top: 44px;
+  height: 12px;
+  overflow: hidden;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+
+.span {
+  position: absolute;
+  top: 44px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.cam {
+  position: absolute;
+  top: 44px;
+  height: 12px;
+  background: repeating-linear-gradient(
+    45deg, rgba(255,68,68,0.08) 0 3px, transparent 3px 6px
+  );
+}
+
+.head {
+  position: absolute;
+  top: 30px;
+  width: 2px;
+  height: 34px;
+  background: var(--accent);
+  z-index: 2;
+}
+
+.head::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+}
+
+.flag {
+  position: absolute;
+  top: 24px;
+  z-index: 1;
+}
+
+.flag i {
+  position: absolute;
+  width: 10px;
+  height: 8px;
+  display: block;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.flag u {
+  position: absolute;
+  width: 2px;
+  height: 34px;
+  display: block;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
+.rails {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  color: var(--fg3);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────── */
+.row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.btn {
+  flex: 1;
+  border: 2px solid var(--border);
+  background: var(--bg2);
+  color: var(--fg);
+  padding: 10px 4px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg3);
+  border-color: var(--fg3);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.btn.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.btn.on:hover:not(:disabled) {
+  background: var(--fg);
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  border-color: var(--fg3);
+}
+
+.seg .btn {
+  padding: 7px 3px;
+  font-size: 10px;
+}
+
+/* ── Event marks ──────────────────────────────────────────────────── */
+.marks {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.mark {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  padding: 10px 10px 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.mark::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--c, var(--fg3));
+}
+
+.mark.ok {
+  border-color: var(--fg3);
+}
+
+.mark.guess {
+  border-color: var(--fg3);
+  border-style: dashed;
+}
+
+.mark .who {
+  flex: 1;
+  min-width: 0;
+}
+
+.mark .who b {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mark .who b .val {
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: var(--accent);
+  font-weight: 400;
+}
+
+.mark .who span {
+  font-size: 10px;
+  color: var(--fg3);
+}
+
+.mini {
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--fg);
+  padding: 5px 8px;
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  flex: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mini:hover {
+  border-color: var(--fg3);
+}
+
+.mini.set {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+/* ── Notes ────────────────────────────────────────────────────────── */
+.note {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--fg3);
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  margin-top: 10px;
+  color: var(--fg2);
+}
+
+/* ── Candidates ───────────────────────────────────────────────────── */
+.cands {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cand-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  padding: 5px 10px;
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.cand-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Saved swims ──────────────────────────────────────────────────── */
+.saved-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 2px solid var(--border);
+}
+
+.saved-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 10px 2px;
+}
+
+.entry .t {
+  font-family: 'VT323', monospace;
+  font-size: 24px;
+  font-weight: 400;
+  min-width: 88px;
+  color: var(--fg);
+}
+
+.entry .d {
+  flex: 1;
+  font-size: 10px;
+  color: var(--fg3);
+}
+
+.best {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  color: var(--bg);
+  background: var(--accent);
+  padding: 2px 5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.x {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg3);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-family: 'VT323', monospace;
+}
+
+.x:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────── */
+.empty {
+  border: 2px solid var(--border);
+  padding: 40px 20px;
+  text-align: center;
+  background: var(--bg2);
+}
+
+.empty h2 {
+  font-family: 'VT323', monospace;
+  font-size: 32px;
+  margin: 12px 0 8px;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.empty p {
+  color: var(--fg3);
+  font-size: 11px;
+  margin: 0 auto;
+  max-width: 30ch;
+  line-height: 1.6;
+}
+
+.file {
+  display: inline-block;
+  margin-top: 20px;
+  background: var(--accent);
+  color: var(--bg);
+  border: 2px solid var(--accent);
+  padding: 12px 20px;
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.file:hover {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+
+.file:active {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.file input {
+  display: none;
+}
+
+.hint {
+  color: var(--fg3);
+  font-size: 10px;
+  margin-top: 12px;
+  line-height: 1.7;
+}
+
+/* ── Settings ─────────────────────────────────────────────────────── */
+.settings-group {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+/* ── Scanning pulse ───────────────────────────────────────────────── */
+@keyframes scan-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.scanning-active {
+  animation: scan-blink 1s steps(2) infinite;
+}
+
+/* ── Retro pixel swimmer animation ────────────────────────────────── */
+.swim-scene {
+  position: relative;
+  width: 100%;
+  height: 72px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.lane-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg, var(--fg3) 0 8px, transparent 8px 16px
+  );
+  opacity: 0.4;
+}
+
+.lane-top { top: 8px; }
+.lane-bot { bottom: 8px; }
+
+.swimmer-wrap {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  animation: swim-lap 6s linear infinite;
+}
+
+/* The pixel swimmer — 4 frame stroke cycle via box-shadow sprite.
+   Each "pixel" is 3x3px. */
+.pixel-swimmer {
+  width: 3px;
+  height: 3px;
+  background: transparent;
+  animation: stroke-cycle 0.5s steps(1) infinite;
+}
+
+/* Swimmer facing right — frame 1: glide */
+@keyframes stroke-cycle {
+  /* Frame 1: glide — arms forward, streamlined */
+  0%, 100% {
+    box-shadow:
+      /* head */
+      0px 0px var(--fg), 3px 0px var(--fg),
+      /* torso */
+      -3px 3px var(--fg), 0px 3px var(--accent), 3px 3px var(--accent), 6px 3px var(--fg),
+      /* arms forward */
+      9px 3px var(--fg3), 12px 3px var(--fg3),
+      /* legs */
+      -6px 6px var(--fg3), -3px 6px var(--fg);
+  }
+  /* Frame 2: catch — arms wide, legs kick */
+  25% {
+    box-shadow:
+      0px 0px var(--fg), 3px 0px var(--fg),
+      -3px 3px var(--fg), 0px 3px var(--accent), 3px 3px var(--accent), 6px 3px var(--fg),
+      9px 0px var(--fg3), 12px 0px var(--fg3),
+      -6px 3px var(--fg3), -6px 6px var(--fg);
+  }
+  /* Frame 3: pull — arms pulling back */
+  50% {
+    box-shadow:
+      0px 0px var(--fg), 3px 0px var(--fg),
+      -3px 3px var(--fg), 0px 3px var(--accent), 3px 3px var(--accent), 6px 3px var(--accent),
+      6px 0px var(--fg3), 3px -3px var(--fg3),
+      -6px 6px var(--fg3), -3px 6px var(--fg);
+  }
+  /* Frame 4: recovery — arms sweeping, legs together */
+  75% {
+    box-shadow:
+      0px 0px var(--fg), 3px 0px var(--fg),
+      -3px 3px var(--fg), 0px 3px var(--accent), 3px 3px var(--accent), 6px 3px var(--fg),
+      0px 0px var(--fg3), 3px 6px var(--fg3),
+      -6px 3px var(--fg), -9px 3px var(--fg3);
+  }
+}
+
+/* Lap animation: swim right, pause at wall, swim left, pause at wall */
+@keyframes swim-lap {
+  0%   { left: 8%;  transform: translateY(-50%) scaleX(1); }
+  45%  { left: 85%; transform: translateY(-50%) scaleX(1); }
+  46%  { left: 85%; transform: translateY(-50%) scaleX(1); }
+  50%  { left: 85%; transform: translateY(-50%) scaleX(-1); }
+  95%  { left: 8%;  transform: translateY(-50%) scaleX(-1); }
+  96%  { left: 8%;  transform: translateY(-50%) scaleX(-1); }
+  99%  { left: 8%;  transform: translateY(-50%) scaleX(1); }
+}
+
+/* Splash particles — tiny pixels that appear near the swimmer */
+.splash {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: var(--fg3);
+  border-radius: 0;
+  animation: splash-particle 0.5s steps(3) infinite;
+}
+
+.s1 { top: -4px; left: -2px; animation-delay: 0s; }
+.s2 { top: -6px; left: 4px;  animation-delay: 0.15s; }
+.s3 { top: -2px; left: -6px; animation-delay: 0.3s; }
+
+@keyframes splash-particle {
+  0%   { opacity: 0; transform: translateY(0); }
+  33%  { opacity: 0.8; transform: translateY(-4px); }
+  66%  { opacity: 0.4; transform: translateY(-7px) translateX(2px); }
+  100% { opacity: 0; transform: translateY(-10px); }
+}
+
+/* Water ripples — dashed lines that drift across */
+.ripple {
+  position: absolute;
+  top: 50%;
+  height: 1px;
+  width: 20px;
+  background: repeating-linear-gradient(
+    90deg, var(--fg3) 0 2px, transparent 2px 5px
+  );
+  opacity: 0;
+  animation: ripple-drift 4s linear infinite;
+}
+
+.r1 { animation-delay: 0s; top: 35%; }
+.r2 { animation-delay: 1.4s; top: 55%; }
+.r3 { animation-delay: 2.8s; top: 65%; }
+
+@keyframes ripple-drift {
+  0%   { left: 20%; opacity: 0; }
+  10%  { opacity: 0.3; }
+  80%  { opacity: 0.15; }
+  100% { left: 80%; opacity: 0; }
+}
+
+/* ── Reduced motion ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .clock.hit { animation: none; }
+  .stage video { transition: none; }
+  .scanning-active { animation: none; }
+  .pool::after { display: none; }
+  .swimmer-wrap, .pixel-swimmer, .splash, .ripple { animation: none; }
+  .swim-scene { display: none; }
+}

@@ -1,0 +1,4 @@
+# extracted frames + inspection artifacts (CSVs, annotated PNGs, PGMs).
+# Regenerate with the ffmpeg command in movenet.mjs / analyze.mjs headers.
+frames/
+out/

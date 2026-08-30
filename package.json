@@ -6,13 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test test/*.test.mjs",
+    "extract-fixtures": "node tools/extract-fixture.mjs /Users/User/Downloads/files/IMG_7199.mov /Users/User/Downloads/files/IMG_7464.mov /Users/User/Downloads/files/IMG_7465.mov /Users/User/Downloads/files/IMG_7466.mov"
   },
   "dependencies": {
+    "@tensorflow-models/pose-detection": "^2.1.3",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0",
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.0"
   },
