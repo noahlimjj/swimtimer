@@ -93,22 +93,20 @@ export function detect(samples, fps) {
 
   /* 5. Candidate events, ranked by loudness and spread out in time.
 
-     This deliberately does NOT name one of them the dive and another the touch.
-     Rules that did that were tested against four clips shot from three camera
-     positions and none survived: the entry splash is the loudest thing in frame
-     when the phone is close to the start, and one of the quietest when it is
-     further back, so "loudest peak near the start of the swim" picks the dive
-     on one clip and mid-pool thrashing on the next. Ranked candidates are what
-     the signal actually supports — they cut a 35-second clip down to three
-     places worth looking, and the call stays with the person watching. */
-  const order = Array.from({ length: s1 - s0 + 1 }, (_, i) => s0 + i)
+     Taken from the whole camera-steady stretch, NOT just the "longest run" from
+     step 4 — that run mislocalizes the swim on clips with a lot of on-deck prep
+     (it can start after the touch). The loudest moments across the steady window
+     are where the events are; which candidate is which is decided in step 6. */
+  const lo = stableIdx[0];
+  const hiIdx = stableIdx[stableIdx.length - 1];
+  const order = Array.from({ length: hiIdx - lo + 1 }, (_, i) => lo + i)
     .filter((i) => gated[i])
     .sort((a, b) => e[b] - e[a]);
-  const spread = Math.round(1.2 * fps);
+  const spread = Math.round(1.0 * fps);
   const peaks = [];
   for (const i of order) {
     if (peaks.every((p) => Math.abs(p - i) > spread)) peaks.push(i);
-    if (peaks.length === 4) break;
+    if (peaks.length === 6) break;
   }
   /* For each peak, walk back to where its rise began. On a splash the leading
      edge sits closer to the event than the peak does, since the peak is water
@@ -117,7 +115,7 @@ export function detect(samples, fps) {
     .map((i) => {
       const foot = base + 0.6 * (e[i] - base);
       let j = i;
-      while (j > s0 && e[j - 1] > foot) j--;
+      while (j > lo && e[j - 1] > foot) j--;
       return { t: samples[j].t, peak: samples[i].t, v: e[i] };
     })
     .sort((a, b) => a.t - b.t);
@@ -132,10 +130,32 @@ export function detect(samples, fps) {
     } else cands.push(c);
   }
 
+  /* 6. Best-effort dive / touch straight off the candidates, so the app shows a
+     time the moment the scan finishes without the user placing anything.
+
+     The read: the entry splash is the loudest disturbance in the first part of
+     the swim, the finish the loudest in the rest. This holds when the phone is
+     near the start (the common case) and breaks when it is far back — then
+     on-deck prep or the swimmer climbing out is louder — so the app always
+     labels these as a scan guess and offers the pose pass to pin the dive.
+
+     The first ~0.6s is skipped: a camera still settling makes a big spike there. */
+  const t0 = samples[lo].t;
+  const tEnd = samples[hiIdx].t;
+  const usable = cands.filter((c) => c.t > t0 + 0.6);
+  const mid = t0 + 0.55 * (tEnd - t0);
+  const loudest = (list) => list.reduce((a, b) => (a && a.v >= b.v ? a : b), null);
+  const diveC = loudest(usable.filter((c) => c.t <= mid)) || usable[0] || null;
+  let dive = diveC ? diveC.t : null;
+  const touchC = loudest(usable.filter((c) => c.t > (dive ?? mid) + 1));
+  let touch = touchC ? touchC.t : null;
+
   return {
     steadyFrom: samples[stableIdx[0]].t,
     steadyTo: samples[stableIdx[stableIdx.length - 1]].t,
     swim: [samples[s0].t, samples[s1].t],
+    dive,
+    touch,
     candidates: cands,
     trace: samples.map((s, i) => ({ t: s.t, v: e[i], ok: gated[i] })),
     roiFrac: roi.length / cellCount,

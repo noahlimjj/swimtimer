@@ -675,6 +675,21 @@ export default function App() {
 
       {!src ? (
         <div className="empty" style={{ marginTop: 16 }}>
+          <div className="swim-scene" aria-hidden="true">
+            <div className="lane-line lane-top" />
+            <div className="lane-line lane-bot" />
+            <div className="swimmer-wrap">
+              <div className="swimmer">
+                <div className="pixel-swimmer" />
+              </div>
+              <div className="splash s1" />
+              <div className="splash s2" />
+              <div className="splash s3" />
+            </div>
+            <div className="ripple r1" />
+            <div className="ripple r2" />
+            <div className="ripple r3" />
+          </div>
           <div className="eyebrow">Step one</div>
           <h2>Load a swim</h2>
           <p>Pick a clip from your camera roll. It plays off your device — nothing is uploaded.</p>
