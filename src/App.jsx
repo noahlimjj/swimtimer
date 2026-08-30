@@ -638,85 +638,13 @@ export default function App() {
 
   return (
     <div className="pool">
-      <style>{`
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=Martian+Mono:wght@400;600;700&display=swap');
-.pool{--ink:#07141A;--deck:#0E2029;--panel:#122B36;--line:#1E4453;--text:#E6F4F7;--muted:#7DA3B1;
-  --water:#2FD4E4;--amber:#FFB454;--pennant:#FF5C63;min-height:100vh;
-  background:radial-gradient(120% 80% at 50% -10%,#123543 0%,var(--ink) 62%);color:var(--text);
-  font-family:'Archivo',ui-sans-serif,system-ui,sans-serif;padding:18px 14px 44px;box-sizing:border-box}
-.pool *{box-sizing:border-box}
-.mono{font-family:'Martian Mono',ui-monospace,SFMono-Regular,monospace;font-variant-numeric:tabular-nums}
-.eyebrow{font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);font-weight:600}
-.board{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#0F2632,#0A1D26);
-  padding:16px;margin:12px 0 14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
-.clock{font-size:clamp(46px,17vw,76px);line-height:.92;font-weight:700;letter-spacing:-.03em;display:block;margin:6px 0 2px}
-.clock.dim{color:#2E5364}
-.clock.hit{animation:pop .35s ease-out}
-@keyframes pop{0%{transform:scale(1.035);color:var(--water)}100%{transform:scale(1)}}
-.pm{font-size:12px;color:var(--muted);margin-top:2px}
-.splits{display:flex;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
-.split{flex:1}.split+.split{border-left:1px solid var(--line);padding-left:12px}
-.split .v{font-size:19px;font-weight:600;margin-top:3px}
-.warn{color:var(--pennant);font-size:12px;margin-top:8px;font-weight:600}
-.stage{border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--line);position:relative;
-  touch-action:none;display:flex;align-items:center;justify-content:center}
-.stage video{width:100%;display:block;transition:transform .12s linear}
-.badge{position:absolute;left:10px;top:10px;background:rgba(7,20,26,.72);border:1px solid var(--line);
-  border-radius:999px;padding:4px 10px;font-size:11px;font-weight:600;pointer-events:none}
-.scanbar{position:absolute;left:0;bottom:0;height:3px;background:var(--water)}
-.rail{margin:14px 0 4px;height:78px;position:relative;touch-action:none;outline:none}
-.rail:focus-visible .cord{box-shadow:0 0 0 2px var(--water)}
-.trace{position:absolute;left:0;right:0;top:0;height:28px;width:100%;display:block}
-.cord{position:absolute;left:0;right:0;top:44px;height:13px;border-radius:7px;overflow:hidden;
-  background:repeating-linear-gradient(90deg,#1B3E4C 0 9px,#16323E 9px 18px)}
-.span{position:absolute;top:44px;height:13px;border-radius:7px;opacity:.55;
-  background:repeating-linear-gradient(90deg,var(--water) 0 9px,#1E8C9A 9px 18px)}
-.cam{position:absolute;top:44px;height:13px;background:repeating-linear-gradient(45deg,#33202a 0 4px,#241820 4px 8px);border-radius:3px}
-.head{position:absolute;top:30px;width:2px;height:35px;background:var(--text)}
-.head::after{content:'';position:absolute;left:-4px;top:-5px;width:10px;height:10px;border-radius:50%;background:var(--text)}
-.flag{position:absolute;top:24px}
-.flag i{position:absolute;width:14px;height:11px;display:block;clip-path:polygon(0 0,100% 0,0 100%)}
-.flag u{position:absolute;width:2px;height:34px;display:block;opacity:.75}
-.rails{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
-.row{display:flex;gap:8px;margin-top:10px}
-.btn{flex:1;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:11px;
-  padding:13px 6px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.btn:active{transform:translateY(1px)}
-.btn:disabled{opacity:.35;cursor:default}
-.btn.on{background:var(--water);border-color:var(--water);color:#04171C}
-.btn.ghost{background:transparent}
-.seg .btn{padding:9px 4px;font-size:12.5px}
-.marks{display:grid;gap:8px;margin-top:16px}
-.mark{border:1px solid var(--line);border-radius:12px;background:var(--deck);padding:10px 10px 10px 14px;
-  display:flex;align-items:center;gap:8px;position:relative;overflow:hidden}
-.mark.ok{border-color:var(--c);background:#16323d}
-.mark.guess{border-color:var(--amber);background:#241f16}
-.mark::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
-.mark .who{flex:1;min-width:0}
-.mark .who b{display:block;font-size:14px}
-.mark .who b .val{color:var(--c);font-weight:600}
-.mark .who span{font-size:11.5px;color:var(--muted)}
-.mini{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:9px;padding:9px 10px;
-  font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;flex:none}
-.mini.set{background:var(--c);border-color:var(--c);color:#04171C}
-.note{background:var(--deck);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:10px;
-  padding:11px 13px;font-size:12.5px;line-height:1.5;margin-top:12px}
-.entry{display:flex;align-items:center;gap:12px;border-top:1px solid var(--line);padding:11px 2px}
-.entry .t{font-size:19px;font-weight:600;min-width:88px}
-.entry .d{flex:1;font-size:11.5px;color:var(--muted)}
-.best{font-size:9.5px;letter-spacing:.14em;color:var(--amber);border:1px solid var(--amber);border-radius:4px;padding:2px 5px;font-weight:700}
-.x{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;padding:4px 6px;font-family:inherit}
-.empty{border:1px dashed var(--line);border-radius:16px;padding:34px 22px;text-align:center;background:var(--deck)}
-.empty h2{font-size:20px;margin:12px 0 6px;font-weight:800}
-.empty p{color:var(--muted);font-size:13.5px;margin:0 auto;max-width:34ch;line-height:1.5}
-.file{display:inline-block;margin-top:18px;background:var(--water);color:#04171C;border-radius:11px;
-  padding:14px 22px;font-weight:700;font-size:15px;cursor:pointer}
-.file input{display:none}
-.hint{color:var(--muted);font-size:11.5px;margin-top:12px;line-height:1.55}
-@media (prefers-reduced-motion:reduce){.clock.hit{animation:none}.stage video{transition:none}}
-      `}</style>
-
-      <div className="eyebrow">Dive to touch · 2 lengths</div>
+      <div className="app-header">
+        <div className="app-logo">🏊</div>
+        <div>
+          <div className="app-title">Swim Timer</div>
+          <div className="app-subtitle">Dive to touch · frame-accurate</div>
+        </div>
+      </div>
       <canvas ref={canvasRef} style={{ display: "none" }} />
 
       {!src ? (
@@ -832,29 +760,30 @@ export default function App() {
               </div>
 
               <div className="row">
-                <button className="btn on" onClick={() => runScan()} disabled={scanning || posePct != null || linesPct != null}>
+                <button className={`btn on ${scanning ? 'scanning-active' : ''}`} onClick={() => runScan()} disabled={scanning || posePct != null || linesPct != null}>
                   {scanning
                     ? `Reading the water ${Math.round(scanPct * 100)}%`
                     : droppedFrames && !result
                     ? `Scan again at ${scanRate}×`
                     : result
                     ? "Scan again"
-                    : "Scan and place marks"}
+                    : "Scan & detect marks"}
                 </button>
               </div>
 
               {result && (
                 <div className="row">
                   <button className="btn ghost" onClick={runLines} disabled={scanning || posePct != null || linesPct != null}>
-                    {linesPct != null ? `Reading the walls ${Math.round(linesPct * 100)}%` : "Filmed side-on? Detect wall crossings"}
+                    {linesPct != null ? `Reading the walls ${Math.round(linesPct * 100)}%` : "Side-on? Detect wall crossings"}
                   </button>
                 </div>
               )}
 
               {result?.candidates?.length > 0 && (
-                <div className="row seg" style={{ flexWrap: "wrap" }}>
+                <div className="cands">
+                  <span className="eyebrow" style={{ alignSelf: 'center', marginRight: 4 }}>Candidates</span>
                   {result.candidates.map((c, i) => (
-                    <button key={i} className="btn ghost mono" onClick={() => seekTo(c.t)}>
+                    <button key={i} className="cand-btn mono" onClick={() => seekTo(c.t)}>
                       {c.t.toFixed(2)}s
                     </button>
                   ))}
@@ -890,19 +819,23 @@ export default function App() {
                 <button className="btn on" onClick={saveSwim} disabled={!valid}>Save this swim</button>
               </div>
 
-              <div className="row seg" style={{ marginTop: 16 }}>
-                {COURSES.map((c) => (
-                  <button key={c.id} className={`btn ${course === c.id ? "on" : "ghost"}`} onClick={() => setCourse(c.id)}>{c.label}</button>
-                ))}
-              </div>
-              <div className="row seg">
-                {[30, 60, 120, 240].map((f) => (
-                  <button key={f} className={`btn ${fps === f ? "on" : "ghost"}`} onClick={() => setFps(f)}>{f}fps</button>
-                ))}
+              <div className="settings-group">
+                <div className="settings-label">Course</div>
+                <div className="row seg" style={{ marginTop: 0 }}>
+                  {COURSES.map((c) => (
+                    <button key={c.id} className={`btn ${course === c.id ? "on" : "ghost"}`} onClick={() => setCourse(c.id)}>{c.label}</button>
+                  ))}
+                </div>
+                <div className="settings-label" style={{ marginTop: 12 }}>Frame rate</div>
+                <div className="row seg" style={{ marginTop: 0 }}>
+                  {[30, 60, 120, 240].map((f) => (
+                    <button key={f} className={`btn ${fps === f ? "on" : "ghost"}`} onClick={() => setFps(f)}>{f} fps</button>
+                  ))}
+                </div>
               </div>
               <div className="hint">
                 {scanMs != null && `Scan took ${(scanMs / 1000).toFixed(1)}s. `}
-                One frame step is {frameMs.toFixed(1)} ms, which is the floor on this clip. The turn is
+                One frame = {frameMs.toFixed(1)} ms — that's the floor on this clip. The turn is
                 never auto-placed: at the far wall the swimmer is smaller than the sparkle on the water.
                 <label className="file" style={{ padding: "10px 16px", fontSize: 13, marginTop: 14 }}>
                   Load a different video<input type="file" accept="video/*" onChange={pickFile} />
@@ -913,15 +846,15 @@ export default function App() {
         </>
       )}
 
-      <div style={{ marginTop: 24 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+      <div className="saved-section">
+        <div className="saved-header">
           <div className="eyebrow">Saved swims {swims.length ? `· ${swims.length}` : ""}</div>
           {swims.length > 0 && (
             <button className="mini" onClick={exportSwims}>{exported ? "Copied ✓" : "Export CSV"}</button>
           )}
         </div>
         {swims.length === 0 ? (
-          <div className="hint">Nothing saved yet. Scan a clip, confirm the two marks, then save.</div>
+          <div className="hint">Nothing saved yet. Scan a clip, confirm the marks, then save.</div>
         ) : (
           swims.map((s) => (
             <div className="entry" key={s.id}>
